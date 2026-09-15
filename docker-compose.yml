@@ -1,0 +1,89 @@
+x-app: &app
+  build: .
+  environment: &app-env
+    ENV: dev
+    DATABASE_URL: postgresql+psycopg://taskforge:taskforge@db:5432/taskforge
+    REDIS_URL: redis://redis:6379/0
+    CELERY_BROKER_URL: redis://redis:6379/1
+    CELERY_RESULT_BACKEND: redis://redis:6379/2
+    STORAGE_DIR: /app/storage
+    SMTP_HOST: mailpit
+    SMTP_PORT: 1025
+    SENTRY_DSN: ${SENTRY_DSN:-}
+  volumes:
+    - storage:/app/storage
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: taskforge
+      POSTGRES_PASSWORD: taskforge
+      POSTGRES_DB: taskforge
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskforge"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save "" --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  mailpit:
+    image: axllent/mailpit:latest
+    ports:
+      - "8025:8025"   # web UI to see the emails the workers send
+      - "1025:1025"
+
+  api:
+    <<: *app
+    ports:
+      - "8000:8000"
+
+  worker:
+    <<: *app
+    command: celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=4 -Q default,reports,emails,media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started   # api runs the migrations first
+
+  beat:
+    <<: *app
+    command: celery -A app.celery_app:celery_app beat --loglevel=INFO
+    depends_on:
+      worker:
+        condition: service_started
+
+  flower:
+    <<: *app
+    command: celery -A app.celery_app:celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      worker:
+        condition: service_started
+
+volumes:
+  pgdata:
+  storage:
