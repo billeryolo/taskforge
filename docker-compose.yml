@@ -59,7 +59,7 @@ services:
 
   worker:
     <<: *app
-    command: celery -A app.celery_app:celery_app worker --loglevel=INFO --concurrency=4 -Q default,reports,emails,media
+    command: worker
     depends_on:
       db:
         condition: service_healthy
@@ -70,14 +70,14 @@ services:
 
   beat:
     <<: *app
-    command: celery -A app.celery_app:celery_app beat --loglevel=INFO
+    command: beat
     depends_on:
       worker:
         condition: service_started
 
   flower:
     <<: *app
-    command: celery -A app.celery_app:celery_app flower --port=5555
+    command: flower
     ports:
       - "5555:5555"
     depends_on:

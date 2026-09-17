@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +35,15 @@ class Settings(BaseSettings):
     # A job still "running" after this many seconds is assumed lost and re-queued by Beat.
     stuck_job_seconds: int = 15 * 60
     artifact_retention_days: int = 7
+
+    @field_validator("database_url")
+    @classmethod
+    def force_psycopg_driver(cls, v: str) -> str:
+        """Managed Postgres hands out ``postgresql://``; pin the psycopg (v3) driver."""
+        for prefix in ("postgres://", "postgresql://"):
+            if v.startswith(prefix):
+                return "postgresql+psycopg://" + v[len(prefix) :]
+        return v
 
 
 @lru_cache
