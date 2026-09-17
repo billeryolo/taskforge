@@ -13,12 +13,12 @@ limits, stuck-job recovery — and in a Redis cache whose invalidation is tag-ba
 docker compose up --build
 ```
 
-| Service | URL |
-| --- | --- |
-| API + Swagger UI | http://localhost:8000/docs |
-| Flower (worker monitoring) | http://localhost:5555 |
-| Mailpit (see the emails workers send) | http://localhost:8025 |
-| Postgres / Redis | `localhost:5432` / `localhost:6379` |
+| Service                               | URL                                 |
+| ------------------------------------- | ----------------------------------- |
+| API + Swagger UI                      | http://localhost:8000/docs          |
+| Flower (worker monitoring)            | http://localhost:5555               |
+| Mailpit (see the emails workers send) | http://localhost:8025               |
+| Postgres / Redis                      | `localhost:5432` / `localhost:6379` |
 
 Try it:
 
@@ -31,6 +31,16 @@ curl -o report.pdf localhost:8000/api/v1/artifacts/<artifact_id>/download
 curl -F file=@photo.jpg localhost:8000/api/v1/uploads/images                    # → webp + thumbnail
 curl -i localhost:8000/api/v1/stats/sales                                       # X-Cache: MISS, then HIT
 ```
+
+## Live on Railway
+
+**https://app-production-b400.up.railway.app** — [`/docs`](https://app-production-b400.up.railway.app/docs) Swagger UI · [`/health`](https://app-production-b400.up.railway.app/health) · [`/api/v1/jobs`](https://app-production-b400.up.railway.app/api/v1/jobs)
+
+On Railway's free plan the API, the Celery worker and Beat run in **one container**
+(`PROCESS=all`, see `docker-entrypoint.sh`) because a volume can only be attached to a single
+service and the API must serve the artifacts the worker writes. Postgres and Redis are Railway
+managed services; email uses the in-memory backend there (no SMTP). `docker compose up` runs
+the fully separated topology (api / worker / beat / flower / mailpit).
 
 ---
 
@@ -84,12 +94,12 @@ tests/               real in-process Celery worker + Postgres + fakeredis
 let a fast worker start before the row is visible. The task receives `job_id` in its kwargs and
 `TrackedTask` updates the row from Celery's lifecycle hooks:
 
-| Hook | Effect on `jobs` |
-| --- | --- |
+| Hook           | Effect on `jobs`                                                                      |
+| -------------- | ------------------------------------------------------------------------------------- |
 | `before_start` | `running`, `attempts += 1`, `celery_task_id`, log context bound (`job_id`, `task_id`) |
-| `on_retry` | `retrying`, `error` |
-| `on_success` | `succeeded`, `result` (JSONB) |
-| `on_failure` | `failed`, `error` + `INSERT dead_letters` |
+| `on_retry`     | `retrying`, `error`                                                                   |
+| `on_success`   | `succeeded`, `result` (JSONB)                                                         |
+| `on_failure`   | `failed`, `error` + `INSERT dead_letters`                                             |
 
 Beat-scheduled work goes through `maintenance.enqueue_scheduled` so it gets a job row too — a
 6 a.m. report shows up in `/jobs` exactly like one requested through the API.
@@ -106,7 +116,7 @@ Beat-scheduled work goes through `maintenance.enqueue_scheduled` so it gets a jo
 )
 ```
 
-Only *transient* errors are retried. A corrupt image raises `UnidentifiedImageError`, which is
+Only _transient_ errors are retried. A corrupt image raises `UnidentifiedImageError`, which is
 excluded via `dont_autoretry_for` — retrying a deterministic failure just delays the dead
 letter (`tests/test_tasks.py::test_corrupt_image_fails_fast_without_retries`).
 
@@ -122,7 +132,7 @@ mailer, replays, and asserts the same job row ends `succeeded`.
 
 Global `task_soft_time_limit=120 / task_time_limit=180`, tightened per task (`emails.send`:
 30/45 s, `media.process_image`: 60/90 s). Tasks catch `SoftTimeLimitExceeded`, delete partial
-output and raise a domain error that is *not* in `autoretry_for`, so a pathological input fails
+output and raise a domain error that is _not_ in `autoretry_for`, so a pathological input fails
 once and goes to the DLQ instead of timing out five times.
 
 ### At-least-once delivery, idempotent tasks
@@ -137,19 +147,19 @@ than `STUCK_JOB_SECONDS`.
 
 `emails.send_campaign` expands into a Celery `group` of `emails.send` tasks, one per recipient.
 A `chord` was deliberately avoided: its callback never fires if one header task fails
-permanently. Instead every send — on success *or* final failure — counts outstanding recipients
+permanently. Instead every send — on success _or_ final failure — counts outstanding recipients
 and closes the campaign when it hits zero. Per-recipient failures land in
 `campaign_recipients.error`; counts use atomic `UPDATE … SET sent_count = sent_count + 1`.
 The email task carries a per-worker `rate_limit` (`EMAIL_RATE_LIMIT`, default `120/m`).
 
 ### Beat schedule
 
-| Entry | Schedule | Task |
-| --- | --- | --- |
-| `daily-sales-report` | `06:00` daily | PDF for the last day, emailed to `REPORT_RECIPIENTS` |
-| `weekly-sales-report` | Mondays `07:00` | 7-day roll-up |
+| Entry                       | Schedule        | Task                                                     |
+| --------------------------- | --------------- | -------------------------------------------------------- |
+| `daily-sales-report`        | `06:00` daily   | PDF for the last day, emailed to `REPORT_RECIPIENTS`     |
+| `weekly-sales-report`       | Mondays `07:00` | 7-day roll-up                                            |
 | `cleanup-expired-artifacts` | hourly at `:30` | delete files + rows older than `ARTIFACT_RETENTION_DAYS` |
-| `requeue-stuck-jobs` | every 5 min | re-publish jobs stuck in `running` |
+| `requeue-stuck-jobs`        | every 5 min     | re-publish jobs stuck in `running`                       |
 
 ### Redis cache with tag invalidation
 
@@ -169,12 +179,12 @@ falls through to the database (`test_cache_outage_degrades_gracefully`).
 
 ### Queues
 
-| Queue | Tasks | Why separate |
-| --- | --- | --- |
-| `reports` | PDF generation | CPU-heavy, long; shouldn't block emails |
-| `emails` | send, campaign fan-out | high volume, rate-limited |
-| `media` | image processing | memory-heavy |
-| `default` | maintenance | tiny, must not starve |
+| Queue     | Tasks                  | Why separate                            |
+| --------- | ---------------------- | --------------------------------------- |
+| `reports` | PDF generation         | CPU-heavy, long; shouldn't block emails |
+| `emails`  | send, campaign fan-out | high volume, rate-limited               |
+| `media`   | image processing       | memory-heavy                            |
+| `default` | maintenance            | tiny, must not starve                   |
 
 One worker consumes all four in compose; in production you'd run one worker per queue with
 different concurrency.
@@ -194,13 +204,13 @@ jobs ──< dead_letters   (SET NULL)          campaigns ──< campaign_recip
 jobs ──< artifacts      (SET NULL)          sales
 ```
 
-| Table | Notes |
-| --- | --- |
-| `jobs` | `status` enum, `payload`/`result` JSONB, `attempts`; indexes `(status, updated_at)` for the stuck-job scan and `(kind, created_at)` for listing |
-| `dead_letters` | `args`/`kwargs` JSONB so a replay is byte-for-byte the original message; `replayed_at` |
-| `artifacts` | on-disk path relative to the storage root (path traversal is rejected), `size_bytes`, `meta` JSONB |
-| `campaign_recipients` | unique `(campaign_id, email)`; `sent_at` doubles as the idempotency marker |
-| `sales` | demo data; indexes on `sold_at` and `region` for the aggregations |
+| Table                 | Notes                                                                                                                                           |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `jobs`                | `status` enum, `payload`/`result` JSONB, `attempts`; indexes `(status, updated_at)` for the stuck-job scan and `(kind, created_at)` for listing |
+| `dead_letters`        | `args`/`kwargs` JSONB so a replay is byte-for-byte the original message; `replayed_at`                                                          |
+| `artifacts`           | on-disk path relative to the storage root (path traversal is rejected), `size_bytes`, `meta` JSONB                                              |
+| `campaign_recipients` | unique `(campaign_id, email)`; `sent_at` doubles as the idempotency marker                                                                      |
+| `sales`               | demo data; indexes on `sold_at` and `region` for the aggregations                                                                               |
 
 ## Tests
 
