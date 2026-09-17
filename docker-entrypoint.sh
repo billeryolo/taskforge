@@ -7,7 +7,8 @@
 #   all     api + worker + beat in one container (single-volume hosts such as Railway, where
 #           the artifact volume can only be attached to one service)
 set -e
-ROLE="${1:-${PROCESS:-api}}"
+# An explicit PROCESS variable wins over the image default (CMD ["api"]).
+ROLE="${PROCESS:-${1:-api}}"
 PORT="${PORT:-8000}"
 CELERY="celery -A app.celery_app:celery_app"
 
