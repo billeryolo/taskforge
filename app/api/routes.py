@@ -247,10 +247,7 @@ def replay_dead_letter(dead_letter_id: uuid.UUID, session: DB) -> DeadLetterOut:
         if job is not None:
             job.status = JobStatus.QUEUED
             job.error = None
-    task = celery_app.tasks.get(dl.task_name)
-    if task is None:
-        raise HTTPException(422, f"task {dl.task_name} is no longer registered")
-    result = task.apply_async(args=dl.args, kwargs=dl.kwargs)
+    result = celery_app.send_task(dl.task_name, args=dl.args, kwargs=dl.kwargs)
     dl.replayed_at = datetime.now(UTC)
     dl.task_id = result.id
     session.commit()

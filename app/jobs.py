@@ -36,9 +36,12 @@ def enqueue(session: Session, kind: str, payload: dict[str, Any]) -> Job:
 
 def dispatch(session: Session, job: Job) -> None:
     """Publish (or re-publish) the message for an existing job row."""
-    task = celery_app.tasks[KINDS[job.kind]]
+    # send_task publishes by *name*, so the API process never needs the task modules
+    # imported (only workers do). task_routes still decides the queue.
     try:
-        result = task.apply_async(kwargs={**job.payload, "job_id": str(job.id)})
+        result = celery_app.send_task(
+            KINDS[job.kind], kwargs={**job.payload, "job_id": str(job.id)}
+        )
     except Exception as exc:  # broker down: surface it on the job instead of a 500
         job.status = JobStatus.FAILED
         job.error = f"publish failed: {exc}"
